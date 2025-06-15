@@ -8,7 +8,9 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from tqdm import tqdm
 
-AUTO_RU_URL = "https://auto.ru/moskva/cars/used/"
+CITY_NAMES = ["moskva", "sankt-peterburg", "ekaterinburg", "novosibirsk", "kaliningrad", "voronezh", "saratov", "samara"]
+
+AUTO_RU_URL = "https://auto.ru/{}/cars/used/"
 
 
 def _extract_all_digits_from_text(text: str) -> int:
@@ -206,8 +208,11 @@ def main() -> int:
         default="dataset",
     )
     args = parser.parse_args()
-    car_info_pages = _parse_auto_ru(AUTO_RU_URL)
-    final_df = pl.concat(car_info_pages)
+    car_dfs = []
+    for city_name in CITY_NAMES:
+        car_info_pages = _parse_auto_ru(AUTO_RU_URL.format(city_name))
+        car_dfs.extend(car_info_pages)
+    final_df = pl.concat(car_dfs)
     os.makedirs(args.destination, exist_ok=True)
     path_to_final_df = os.path.join(args.destination, "auto_ru_cars.parquet")
     final_df.write_parquet(path_to_final_df)
