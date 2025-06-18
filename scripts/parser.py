@@ -1,15 +1,25 @@
 import argparse
 import os
 from dataclasses import dataclass
+import itertools
 
 import polars as pl
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from tqdm import tqdm
+from joblib import Parallel, delayed
 
-CITY_NAMES = ["moskva", "sankt-peterburg", "ekaterinburg", "novosibirsk", "kaliningrad", "voronezh", "saratov", "samara"]
-
+CITY_NAMES = [
+    "moskva",
+    "sankt-peterburg",
+    "ekaterinburg",
+    "novosibirsk",
+    "kaliningrad",
+    "voronezh",
+    "saratov",
+    "samara",
+]
 AUTO_RU_URL = "https://auto.ru/{}/cars/used/"
 
 
@@ -17,23 +27,39 @@ def _extract_all_digits_from_text(text: str) -> int:
     return int("".join(filter(str.isdigit, text)))
 
 
+def _get_car_page_value(
+    soup: BeautifulSoup,
+    li_class_name: str,
+    div_class_name: str,
+    default_value: str = "",
+) -> str:
+    try:
+        return (
+            soup.find("li", class_=li_class_name)
+            .find_all("div", class_=div_class_name)[1]
+            .text
+        )
+    except:
+        return default_value
+
+
 @dataclass
 class CarInfo:
-    is_available: bool = False
-    gen: str = ""
-    year: int = 0
-    mileage: int = 0  # km
-    color: str = ""
-    equipment: str = ""
-    tax: int = 2
-    transmission: str = ""
-    drive: str = ""
-    wheel_type: str = ""
-    state: str = ""
-    owners: int = ""
-    price: int = 0  # rubles
-    model_name: str = ""
-    description: str = ""
+    is_available: bool | None = False
+    gen: str | None = ""
+    year: int | None = 0
+    mileage: int | None = 0  # km
+    color: str | None = ""
+    equipment: str | None = ""
+    tax: int | None = 2
+    transmission: str | None = ""
+    drive: str | None = ""
+    wheel_type: str | None = ""
+    state: str | None = ""
+    owners: int | None = ""
+    price: int | None = 0  # rubles
+    model_name: str | None = ""
+    description: str | None = ""
 
     def dict(self):
         return {
@@ -60,17 +86,22 @@ class CarInfo:
         car_info = driver.find_element(By.CLASS_NAME, "CardInfo-ateuv")
         soup = BeautifulSoup(car_info.get_attribute("innerHTML"), "html.parser")
 
-        is_available_text = (
-            soup.find("li", class_="CardInfoRow CardInfoRow_availability")
-            .find_all("div", class_="CardInfoRow__cell")[1]
-            .text.replace("\xa0", " ")
-        )
+        is_available_text = _get_car_page_value(
+            soup=soup,
+            li_class_name="CardInfoRow CardInfoRow_availability",
+            div_class_name="CardInfoRow__cell",
+            default_value="",
+        ).replace("\xa0", " ")
+
         is_available = is_available_text == "В наличии"
-        gen = (
-            soup.find("li", class_="CardInfoRow CardInfoRow_superGen")
-            .find_all("div", class_="CardInfoRow__cell")[1]
-            .text.replace("\xa0", " ")
-        )
+
+        gen = _get_car_page_value(
+            soup=soup,
+            li_class_name="CardInfoRow CardInfoRow_superGen",
+            div_class_name="CardInfoRow__cell",
+            default_value="",
+        ).replace("\xa0", "")
+
         year = _extract_all_digits_from_text(
             soup.find("li", class_="CardInfoRow CardInfoRow_year")
             .find_all("div", class_="CardInfoRow__cell")[1]
@@ -156,7 +187,7 @@ class CarInfo:
         )
 
 
-def _parse_auto_ru(url: str) -> list[CarInfo]:
+def _parse_auto_ru(url: str, city_name: str) -> list[CarInfo]:
     chrome_options = webdriver.ChromeOptions()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--headless")  # Run Chrome in headless mode
@@ -168,7 +199,7 @@ def _parse_auto_ru(url: str) -> list[CarInfo]:
     driver = webdriver.Chrome(options=chrome_options)
     driver.implicitly_wait(5)
     car_info_pages = []
-    for page_index in tqdm(range(1, 100), desc="Page number parse"):
+    for page_index in range(1, 100):
         page_url = url
         if page_index > 1:
             page_url = f"{url}?page={page_index}"
@@ -187,12 +218,13 @@ def _parse_auto_ru(url: str) -> list[CarInfo]:
                 car_info = CarInfo.from_page(driver, car_link)
                 car_infos.append(car_info)
             except Exception as e:
-                print(f"Error occured getting car info: {e}")
                 continue
 
         car_infos = [car_info.dict() for car_info in car_infos]
         df = pl.DataFrame(car_infos)
-        print(f"Number parsed cars from page: {page_index} = {df.shape[0]}")
+        print(
+            f"Number parsed cars from page: {page_index} = {df.shape[0]} for city: {city_name}"
+        )
         car_info_pages.append(df)
 
     return car_info_pages
@@ -209,9 +241,12 @@ def main() -> int:
     )
     args = parser.parse_args()
     car_dfs = []
-    for city_name in CITY_NAMES:
-        car_info_pages = _parse_auto_ru(AUTO_RU_URL.format(city_name))
-        car_dfs.extend(car_info_pages)
+    car_dfs = Parallel(n_jobs=len(CITY_NAMES))(
+        delayed(_parse_auto_ru)(AUTO_RU_URL.format(city_name), city_name)
+        for city_name in CITY_NAMES
+    )
+    car_dfs = list(itertools.chain.from_iterable(car_dfs))
+    car_dfs = [car_df for car_df in car_dfs if car_df.shape[0] != 0]
     final_df = pl.concat(car_dfs)
     os.makedirs(args.destination, exist_ok=True)
     path_to_final_df = os.path.join(args.destination, "auto_ru_cars.parquet")
