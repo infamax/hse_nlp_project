@@ -14,7 +14,7 @@ First step is a clone project repository
 git clone https://github.com/infamax/hse_nlp_project.git
 ```
 
-Second step is launch docker container for this project. Docker container contains all needed dependencies for this project. To launch docker container for this project run the following commands
+Second step is launch docker container for this project. Docker container contains all needed dependencies for this project. To launch docker container for this project. Assume you have gpu and install [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html). Run the following commands
 
 ```bash
 make build_image # Create docker image for this project
@@ -30,4 +30,6 @@ python3 scripts/split_dataset.py --dataset-folder <path_to_dataset_folder>
 ```
 
 <path_to_dataset_folder> - Any folder you want to collect dataset.
+
+
 
